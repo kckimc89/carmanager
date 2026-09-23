@@ -47,6 +47,10 @@ const EVENT_SEED=[
 {date:'2025-09-29',km:null,type:'사건/사고',title:'상가 주차장 사고 · 수리',place:'석남동 대원공업사(1급 블루핸즈)',memo:'상가 주차장 사고 후 수리.'}
 ];
 const K='carManagerV1'; let db;
+// V1.10.11 기본 표시 도우미: 이전판에서 누락되어 정비/이상 목록 렌더링이 중단되던 원인을 수정합니다.
+function fmt(v){const n=Number(v);return Number.isFinite(n)?Math.round(n).toLocaleString('ko-KR'):String(v??'')}
+function esc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+
 const RULES=[
  {name:'엔진오일 · 필터',keys:['엔진오일'],km:10000,months:12},
  {name:'에어클리너 필터',keys:['에어 클리너','에어크리너','공기 필터'],km:20000,months:24},
@@ -76,13 +80,17 @@ function init(){
  // 기본 예시/과거 자료는 '없는 기록만' 추가합니다. 사용자가 수정한 기록은 절대 덮어쓰지 않습니다.
  EVENT_SEED.forEach(e=>{if(!db.events.some(x=>x.date===e.date&&x.title===e.title))db.events.push({...e})});
  SEED.forEach(e=>{if(!db.maint.some(x=>x.date===e.date&&+x.km===+e.km))db.maint.push(JSON.parse(JSON.stringify(e)))});
- db.meta.schemaVersion='1.10.10';
+ db.meta.schemaVersion='1.10.11';
  rebuildInspectionChecks();persist(false);render();
 }
 function persist(showError=true){
  try{db.meta=db.meta||{};db.meta.lastSavedAt=new Date().toISOString();localStorage.setItem(K,JSON.stringify(db));let check=localStorage.getItem(K);if(!check)throw new Error('저장 확인 실패');return true}catch(err){console.error(err);if(showError)alert('저장하지 못했습니다. iPhone 저장공간 또는 사진 용량을 확인해 주세요. 사진을 줄이거나 백업 후 다시 시도해 주세요.');return false}
 }
-function go(id,b){document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));document.getElementById(id).classList.add('on');document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');window.scrollTo(0,0);render()}
+function go(id,b){
+ document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));const page=document.getElementById(id);if(page)page.classList.add('on');document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('on'));if(b)b.classList.add('on');window.scrollTo(0,0);
+ // 해당 화면을 먼저 독립적으로 그립니다. 다른 화면 오류가 정비/이상 기록을 가리지 않게 합니다.
+ try{if(id==='maint')renderRecords();else if(id==='events')renderEvents();else render();}catch(err){console.error('화면 표시 오류',id,err);if(id==='maint')renderRecords();if(id==='events')renderEvents();}
+}
 function safeArray(v){return Array.isArray(v)?v:[]}
 function safeText(v){return v===null||v===undefined?'':String(v)}
 function safeNum(v){let n=Number(v);return Number.isFinite(n)?n:0}
@@ -155,7 +163,7 @@ function monthsSince(dateStr,now){if(!dateStr)return 999;let d=new Date(dateStr+
 function renderCheckups(){let nowKm=+db.odo.km,now=new Date(db.odo.date+'T12:00:00');let arr=CHECK_RULES.map(r=>{let c=db.checks?.[r.key];let alertResult=c&&['관찰 필요','정비 필요'].includes(c.result);let due=alertResult||!c||(nowKm-(+c.km||0)>=r.everyKm)||monthsSince(c.date,now)>=r.everyMonths;return {r,c,due}});arr.sort((a,b)=>Number(b.due)-Number(a.due));checkups.innerHTML=arr.slice(0,4).map(x=>`<div class="manageCard"><div class="manageTop"><div class="manageName">${esc(x.r.name)}</div><span class="status ${x.due?'soon':''}">${x.due?'한번 확인':'확인함'}</span></div><div class="muted" style="margin-top:8px">${esc(x.r.reason)}</div>${x.c?`<div class="small muted" style="margin-top:8px">마지막 확인 ${esc(x.c.date)} · ${fmt(x.c.km)}km · ${esc(x.c.result)}</div>`:'<div class="small muted" style="margin-top:8px">앱에 확인 기록이 아직 없습니다.</div>'}<div class="btnrow"><button class="ghost" onclick="openCheck('${x.r.key}')">확인했어요</button></div></div>`).join('')}
 function openCheck(key){let r=CHECK_RULES.find(x=>x.key===key);checkKey.value=key;checkTitle.textContent=r.name+' 확인';cDate.value=db.odo.date;cKm.value=db.odo.km;cResult.value='이상 없음';cMemo.value='';checkDlg.showModal()}
 function saveCheck(e){e.preventDefault();db.checks=db.checks||{};db.checks[checkKey.value]={date:cDate.value,km:+cKm.value,result:cResult.value,memo:cMemo.value};persist();checkDlg.close();render()}
-function renderEvents(){let es=[...(db.events||[])].sort((a,b)=>b.date.localeCompare(a.date));eventRecords.innerHTML=es.length?es.map(e=>{let idx=db.events.indexOf(e);return `<div class="eventCard"><div class="eventTop"><b>${esc(e.date)}${e.km?' · '+fmt(e.km)+'km':''}</b><span class="eventType ${e.type==='이상현상'?'abnormal':e.type==='사건/사고'?'accident':''}">${esc(e.type)}</span></div><div class="eventTitle">${esc(e.title)}</div>${e.place?`<div class="muted">${esc(e.place)}</div>`:''}<div class="eventMemo">${esc(e.memo)}</div>${e.photo?`<img class="photoThumb" src="${e.photo}" alt="기록 사진">`:''}<div class="miniActions"><button class="ghost" onclick="editEvent(${idx})">수정</button><button class="ghost danger" onclick="deleteEvent(${idx})">삭제</button></div></div>`}).join(''):'<div class="empty">기록이 없습니다.</div>'}
+function renderEvents(){const eventRecords=document.getElementById('eventRecords');if(!eventRecords)return;let es=[...(db.events||[])].sort((a,b)=>safeText(b.date).localeCompare(safeText(a.date)));eventRecords.innerHTML=es.length?es.map(e=>{let idx=db.events.indexOf(e);return `<div class="eventCard"><div class="eventTop"><b>${esc(e.date)}${e.km?' · '+fmt(e.km)+'km':''}</b><span class="eventType ${e.type==='이상현상'?'abnormal':e.type==='사건/사고'?'accident':''}">${esc(e.type)}</span></div><div class="eventTitle">${esc(e.title)}</div>${e.place?`<div class="muted">${esc(e.place)}</div>`:''}<div class="eventMemo">${esc(e.memo)}</div>${e.photo?`<img class="photoThumb" src="${e.photo}" alt="기록 사진">`:''}<div class="miniActions"><button class="ghost" onclick="editEvent(${idx})">수정</button><button class="ghost danger" onclick="deleteEvent(${idx})">삭제</button></div></div>`}).join(''):'<div class="empty">기록이 없습니다.</div>'}
 function today(){return new Date().toISOString().slice(0,10)}
 function addDetailRow(name='',cost=''){let d=document.createElement('div');d.className='detailRow';d.innerHTML=`<input class="mdName" placeholder="예: 엔진오일" value="${esc(name)}" required><input class="mdCost" type="number" min="0" placeholder="금액" value="${cost||''}"><button type="button" class="ghost" onclick="this.parentElement.remove()">×</button>`;mDetailRows.appendChild(d)}
 function detailValues(){return [...mDetailRows.querySelectorAll('.detailRow')].map(r=>({name:r.querySelector('.mdName').value.trim(),cost:+r.querySelector('.mdCost').value||null})).filter(x=>x.name)}
